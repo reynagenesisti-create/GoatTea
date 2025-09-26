@@ -1,0 +1,13 @@
+D:\Chess Engines\GOATea\bin\Release\net8.0\GOATea.exe
+D:\Chess Engines\GOATea\bin\Release\net8.0\GOATea.deps.json
+D:\Chess Engines\GOATea\bin\Release\net8.0\GOATea.runtimeconfig.json
+D:\Chess Engines\GOATea\bin\Release\net8.0\GOATea.dll
+D:\Chess Engines\GOATea\bin\Release\net8.0\GOATea.pdb
+D:\Chess Engines\GOATea\obj\Release\net8.0\GOATea.GeneratedMSBuildEditorConfig.editorconfig
+D:\Chess Engines\GOATea\obj\Release\net8.0\GOATea.csproj.CoreCompileInputs.cache
+D:\Chess Engines\GOATea\obj\Release\net8.0\GOATea.sourcelink.json
+D:\Chess Engines\GOATea\obj\Release\net8.0\GOATea.dll
+D:\Chess Engines\GOATea\obj\Release\net8.0\refint\GOATea.dll
+D:\Chess Engines\GOATea\obj\Release\net8.0\GOATea.pdb
+D:\Chess Engines\GOATea\obj\Release\net8.0\GOATea.genruntimeconfig.cache
+D:\Chess Engines\GOATea\obj\Release\net8.0\ref\GOATea.dll

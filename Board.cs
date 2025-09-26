@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 
 // Bitboard-based board representation with make/unmake move support.
 // This implementation keeps 12 piece bitboards (White: P,N,B,R,Q,K then Black same order)
@@ -39,20 +40,25 @@ public readonly struct Move
 
 internal class Undo
 {
-    public ulong[] BitboardsBefore; // length 12
-    public ulong OccupancyWhiteBefore;
-    public ulong OccupancyBlackBefore;
-    public ulong OccupancyAllBefore;
-    public int CastlingRightsBefore;
-    public int EnPassantBefore;
-    public int HalfmoveClockBefore;
-    public int FullmoveNumberBefore;
-    public Color SideToMoveBefore;
+    // compact undo record
+    public int MovingIndex;
+    public int From;
+    public int To;
+    public int CapturedIndex; // -1 if none
+    public int CapturedSquare; // where captured piece was
+    public bool WasEnPassant;
+    public bool WasPromotion;
+    public PieceType? PromotionPiece;
+    public bool WasCastle;
+    public int RookFrom, RookTo;
 
-    public Undo(int boards)
-    {
-        BitboardsBefore = new ulong[boards];
-    }
+    public int PrevCastlingRights;
+    public int PrevEnPassant;
+    public int PrevHalfmoveClock;
+    public int PrevFullmoveNumber;
+    public Color PrevSideToMove;
+
+    public Undo() { CapturedIndex = -1; }
 }
 
 public class Board
@@ -63,9 +69,14 @@ public class Board
 
     private readonly ulong[] bitboards = new ulong[TotalPieceBitboards];
 
+    // quick lookup: square -> piece index (0..11) or -1
+    private readonly int[] squares = new int[64];
+
     private ulong occupancyWhite;
     private ulong occupancyBlack;
     private ulong occupancyAll;
+
+    public ulong OccupancyAll => occupancyAll;
 
     public Color SideToMove { get; private set; } = Color.White;
     // Castling rights: bit0 = White K, bit1 = White Q, bit2 = Black K, bit3 = Black Q
@@ -92,6 +103,7 @@ public class Board
         HalfmoveClock = 0;
         FullmoveNumber = 1;
         history.Clear();
+        for (int i = 0; i < 64; i++) squares[i] = -1;
     }
 
     private static int IndexOf(Color color, PieceType piece)
@@ -144,6 +156,7 @@ public class Board
         }
 
         RecalcOccupancies();
+        RebuildSquaresFromBitboards();
 
         // side to move
         SideToMove = parts[1] == "w" ? Color.White : Color.Black;
@@ -174,6 +187,21 @@ public class Board
         return rank * 8 + file;
     }
 
+    private void RebuildSquaresFromBitboards()
+    {
+        for (int i = 0; i < 64; i++) squares[i] = -1;
+        for (int i = 0; i < bitboards.Length; i++)
+        {
+            ulong bb = bitboards[i];
+            while (bb != 0)
+            {
+                int sq = BitOperations.TrailingZeroCount(bb);
+                squares[sq] = i;
+                bb &= bb - 1;
+            }
+        }
+    }
+
     public static string SquareToAlgebraic(int square)
     {
         int file = square % 8;
@@ -184,37 +212,38 @@ public class Board
     // Returns -1 if no piece; otherwise returns bitboard index (0..11)
     public int GetPieceIndexAt(int square)
     {
-        ulong mask = 1UL << square;
-        for (int i = 0; i < bitboards.Length; i++)
-            if ((bitboards[i] & mask) != 0) return i;
-        return -1;
+        if (square < 0 || square >= 64) return -1;
+        return squares[square];
     }
+
+    public bool HasAnyPiece() => occupancyAll != 0UL;
 
     // MakeMove stores a copy of current state and applies the move; UnmakeMove restores state.
     public void MakeMove(Move move)
     {
-        // push undo with copies
-        var u = new Undo(TotalPieceBitboards);
-        Array.Copy(bitboards, u.BitboardsBefore, bitboards.Length);
-        u.OccupancyWhiteBefore = occupancyWhite;
-        u.OccupancyBlackBefore = occupancyBlack;
-        u.OccupancyAllBefore = occupancyAll;
-        u.CastlingRightsBefore = CastlingRights;
-        u.EnPassantBefore = EnPassantSquare;
-        u.HalfmoveClockBefore = HalfmoveClock;
-        u.FullmoveNumberBefore = FullmoveNumber;
-        u.SideToMoveBefore = SideToMove;
-        history.Push(u);
-
         // Reset en-passant; set if this move is a pawn double push
         EnPassantSquare = -1;
 
         int movingIndex = IndexOf(SideToMove, move.Piece);
+        // push compact undo record
+        var u = new Undo();
+        u.MovingIndex = movingIndex;
+        u.From = move.From;
+        u.To = move.To;
+        u.PrevCastlingRights = CastlingRights;
+        u.PrevEnPassant = EnPassantSquare;
+        u.PrevHalfmoveClock = HalfmoveClock;
+        u.PrevFullmoveNumber = FullmoveNumber;
+        u.PrevSideToMove = SideToMove;
+
+        // will fill captured info below if any
+        history.Push(u);
         ulong fromBit = 1UL << move.From;
         ulong toBit = 1UL << move.To;
 
         // Remove moving piece from 'from'
         bitboards[movingIndex] &= ~fromBit;
+        squares[move.From] = -1;
 
         // Handle captures (normal capture or en-passant)
         if (move.IsEnPassant)
@@ -224,13 +253,25 @@ public class Board
             ulong capBit = 1UL << capSq;
             // captured pawn is opposite color pawn
             bitboards[IndexOf(Opposite(SideToMove), PieceType.Pawn)] &= ~capBit;
+            squares[capSq] = -1;
+            // record capture
+            var top = history.Peek();
+            top.CapturedIndex = IndexOf(Opposite(SideToMove), PieceType.Pawn);
+            top.CapturedSquare = capSq;
+            top.WasEnPassant = true;
         }
         else if (move.IsCapture)
         {
             // find which piece occupies 'to'
             int capIndex = GetPieceIndexAt(move.To);
             if (capIndex >= 0)
+            {
                 bitboards[capIndex] &= ~toBit;
+                squares[move.To] = -1;
+                var top = history.Peek();
+                top.CapturedIndex = capIndex;
+                top.CapturedSquare = move.To;
+            }
         }
 
         // Promotions: remove pawn and add promoted piece
@@ -239,11 +280,16 @@ public class Board
             // pawn removed from from (already removed)
             // add promoted piece on 'to'
             bitboards[IndexOf(SideToMove, move.PromotionPiece.Value)] |= toBit;
+            squares[move.To] = IndexOf(SideToMove, move.PromotionPiece.Value);
+            var top = history.Peek();
+            top.WasPromotion = true;
+            top.PromotionPiece = move.PromotionPiece.Value;
         }
         else
         {
             // normal move: place moving piece on 'to'
             bitboards[movingIndex] |= toBit;
+            squares[move.To] = movingIndex;
         }
 
         // Castling handling: move rook as well
@@ -257,12 +303,14 @@ public class Board
                     // move rook h1(7) to f1(5)
                     bitboards[IndexOf(Color.White, PieceType.Rook)] &= ~(1UL << 7);
                     bitboards[IndexOf(Color.White, PieceType.Rook)] |= 1UL << 5;
+                    var top = history.Peek(); top.WasCastle = true; top.RookFrom = 7; top.RookTo = 5;
                 }
                 else if (move.To == 2) // queen side
                 {
                     // move rook a1(0) to d1(3)
                     bitboards[IndexOf(Color.White, PieceType.Rook)] &= ~(1UL << 0);
                     bitboards[IndexOf(Color.White, PieceType.Rook)] |= 1UL << 3;
+                    var top = history.Peek(); top.WasCastle = true; top.RookFrom = 0; top.RookTo = 3;
                 }
             }
             else
@@ -271,11 +319,13 @@ public class Board
                 {
                     bitboards[IndexOf(Color.Black, PieceType.Rook)] &= ~(1UL << 63);
                     bitboards[IndexOf(Color.Black, PieceType.Rook)] |= 1UL << 61;
+                    var top = history.Peek(); top.WasCastle = true; top.RookFrom = 63; top.RookTo = 61;
                 }
                 else if (move.To == 58) // black queenside (e8->c8)
                 {
                     bitboards[IndexOf(Color.Black, PieceType.Rook)] &= ~(1UL << 56);
                     bitboards[IndexOf(Color.Black, PieceType.Rook)] |= 1UL << 59;
+                    var top = history.Peek(); top.WasCastle = true; top.RookFrom = 56; top.RookTo = 59;
                 }
             }
         }
@@ -340,15 +390,56 @@ public class Board
     {
         if (history.Count == 0) throw new InvalidOperationException("No move to unmake");
         var u = history.Pop();
-        Array.Copy(u.BitboardsBefore, bitboards, bitboards.Length);
-        occupancyWhite = u.OccupancyWhiteBefore;
-        occupancyBlack = u.OccupancyBlackBefore;
-        occupancyAll = u.OccupancyAllBefore;
-        CastlingRights = u.CastlingRightsBefore;
-        EnPassantSquare = u.EnPassantBefore;
-        HalfmoveClock = u.HalfmoveClockBefore;
-        FullmoveNumber = u.FullmoveNumberBefore;
-        SideToMove = u.SideToMoveBefore;
+
+        // restore side and counters
+        SideToMove = u.PrevSideToMove;
+        CastlingRights = u.PrevCastlingRights;
+        EnPassantSquare = u.PrevEnPassant;
+        HalfmoveClock = u.PrevHalfmoveClock;
+        FullmoveNumber = u.PrevFullmoveNumber;
+
+        ulong fromBit = 1UL << u.From;
+        ulong toBit = 1UL << u.To;
+
+        // remove piece from 'to'
+        bitboards[u.MovingIndex] &= ~toBit;
+        squares[u.To] = -1;
+
+        // if promotion, remove promoted piece and restore pawn at from
+        if (u.WasPromotion && u.PromotionPiece.HasValue)
+        {
+            // remove promoted piece
+            bitboards[IndexOf(SideToMove, u.PromotionPiece.Value)] &= ~toBit;
+            // restore pawn on from
+            bitboards[IndexOf(SideToMove, PieceType.Pawn)] |= fromBit;
+            squares[u.From] = IndexOf(SideToMove, PieceType.Pawn);
+        }
+        else
+        {
+            // move piece back to from
+            bitboards[u.MovingIndex] |= fromBit;
+            squares[u.From] = u.MovingIndex;
+        }
+
+        // restore captured piece if any
+        if (u.CapturedIndex >= 0)
+        {
+            bitboards[u.CapturedIndex] |= 1UL << u.CapturedSquare;
+            squares[u.CapturedSquare] = u.CapturedIndex;
+        }
+
+        // undo rook move if castle
+        if (u.WasCastle)
+        {
+            // rook moved from RookFrom -> RookTo during make; move it back
+            int rookIndex = IndexOf(SideToMove, PieceType.Rook);
+            bitboards[rookIndex] &= ~(1UL << u.RookTo);
+            bitboards[rookIndex] |= 1UL << u.RookFrom;
+            squares[u.RookTo] = -1;
+            squares[u.RookFrom] = rookIndex;
+        }
+
+        RecalcOccupancies();
     }
 
     private static Color Opposite(Color c) => c == Color.White ? Color.Black : Color.White;
