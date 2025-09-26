@@ -10,3 +10,4 @@ D:\Chess Engines\GOATea\obj\Debug\net8.0\refint\GOATea.dll
 D:\Chess Engines\GOATea\obj\Debug\net8.0\GOATea.pdb
 D:\Chess Engines\GOATea\obj\Debug\net8.0\GOATea.genruntimeconfig.cache
 D:\Chess Engines\GOATea\obj\Debug\net8.0\ref\GOATea.dll
+D:\Chess Engines\GOATea\obj\Debug\net8.0\GOATea.sourcelink.json
