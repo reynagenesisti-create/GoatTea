@@ -16,6 +16,7 @@ class Program
 
     static void Main(string[] args)
     {
+        board.SetPositionFromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
         // Read lines from stdin and respond according to the UCI protocol.
         // This skeleton implements the basic handshake and dummy handlers.
         while (isRunning && Console.In.Peek() >= 0)
@@ -57,6 +58,9 @@ class Program
                     break;
                 case "debug":
                     HandleDebug(rest);
+                    break;
+                case "perft":
+                    HandlePerft(rest);
                     break;
 
                 case "quit":
@@ -337,6 +341,68 @@ class Program
         Thread.Sleep(50);
         // Respond with a legal-looking move (e2e4) and a ponder move (e7e5)
         Console.WriteLine("bestmove e2e4 ponder e7e5");
+    }
+
+    static void HandlePerft(string rest)
+    {
+        // Usage: perft <depth> [fen <fen>]
+        var parts = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+        {
+            Console.WriteLine("info string perft requires a depth");
+            return;
+        }
+        if (!int.TryParse(parts[0], out int depth) || depth < 1)
+        {
+            Console.WriteLine("info string invalid perft depth");
+            return;
+        }
+
+        string saveFen = BuildFenFromBoard();
+        // optional: fen <fen...>
+        if (parts.Length >= 2 && parts[1] == "fen")
+        {
+            var fenParts = new List<string>();
+            for (int i = 2; i < parts.Length; i++) fenParts.Add(parts[i]);
+            var fen = string.Join(' ', fenParts);
+            try
+            {
+                // save current position as FEN, then set new FEN
+                board.SetPositionFromFen(fen);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("info string invalid FEN for perft: " + ex.Message);
+                return;
+            }
+        }
+
+        // run perft
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        long nodes = Perft(board, depth);
+        sw.Stop();
+        double seconds = Math.Max(0.001, sw.Elapsed.TotalSeconds);
+        long nps = (long)(nodes / seconds);
+        Console.WriteLine($"info string perft depth={depth} nodes={nodes} time_ms={sw.ElapsedMilliseconds} nps={nps}");
+
+        // restore saved board if we changed it
+        // restore original position
+        try { board.SetPositionFromFen(saveFen); } catch { }
+    }
+
+    static long Perft(Board b, int depth)
+    {
+        if (depth == 0) return 1;
+        var moves = MoveGenerator.GenerateLegalMoves(b);
+        if (depth == 1) return moves.Count;
+        long nodes = 0;
+        foreach (var mv in moves)
+        {
+            b.MakeMove(mv);
+            nodes += Perft(b, depth - 1);
+            b.UnmakeMove();
+        }
+        return nodes;
     }
 
     static void HandleStop()
